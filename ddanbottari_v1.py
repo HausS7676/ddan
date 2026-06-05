@@ -1357,6 +1357,7 @@ if run_scan:
 if st.session_state.picker_result:
     results_list = st.session_state.picker_result
     base_date = st.session_state.picker_base_date
+    market_cond = get_market_condition(base_date)
 
     st.markdown("---")
 
