@@ -370,7 +370,15 @@ def get_stock_universe(market="전체", min_mktcap=500, min_trade=10, full_scan=
     # ── 공통: 섹터 매핑 적용 ──
     if final_df is not None and not final_df.empty:
         try:
-            df_desc = fdr.StockListing('KRX-DESC')[['Code', 'Sector']]
+            df_desc = fdr.StockListing('KRX-DESC')
+            # KOSDAQ의 경우 Sector가 '우량기업부' 등으로 나오는 경우가 있으므로 Industry 컬럼 우선 사용
+            if 'Industry' in df_desc.columns:
+                df_desc['Sector'] = df_desc.apply(lambda x: x['Industry'] if pd.notnull(x.get('Industry')) and str(x.get('Industry')).strip() != '' else x.get('Sector', '기타'), axis=1)
+            
+            # '기업부' 글자가 포함된 경우 기타로 처리
+            df_desc['Sector'] = df_desc['Sector'].apply(lambda x: '기타' if '기업부' in str(x) else x)
+            
+            df_desc = df_desc[['Code', 'Sector']]
             final_df = pd.merge(final_df, df_desc, on='Code', how='left')
             final_df['Sector'] = final_df['Sector'].fillna('기타')
         except:
@@ -1376,7 +1384,7 @@ if st.session_state.picker_result:
         price_str = f"{r['현재가']:,}"
         table_data.append({
             '순위': rank_icons.get(i, f"{i}위"),
-            '유형': "S등급" if r['SmartScore'] >= 250 else ("A등급" if r['SmartScore'] >= 200 else "순수보따리"),
+            '유형': "S등급" if r['SmartScore'] >= 600 else ("A등급" if r['SmartScore'] >= 500 else "순수보따리"),
             '코드': r['티커'],
             '종목명': r['종목명'],
             '섹터': r['섹터'],
@@ -1445,10 +1453,17 @@ if st.session_state.picker_result:
             
             st.dataframe(inv_disp, use_container_width=True)
 
-    if event and len(event.selection.rows) > 0:
-        sel_idx = event.selection.rows[0]
-        selected_row = results_list[sel_idx]
-        show_detail_dialog(selected_row, base_date)
+    if "last_selection" not in st.session_state:
+        st.session_state.last_selection = []
+
+    current_selection = event.selection.rows if event else []
+    
+    if current_selection != st.session_state.last_selection:
+        st.session_state.last_selection = current_selection
+        if len(current_selection) > 0:
+            sel_idx = current_selection[0]
+            selected_row = results_list[sel_idx]
+            show_detail_dialog(selected_row, base_date)
 
 else:
     # 초기 화면
