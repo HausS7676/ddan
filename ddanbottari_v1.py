@@ -389,6 +389,81 @@ def get_stock_universe(market="전체", min_mktcap=500, min_trade=10, full_scan=
     return pd.DataFrame()
 
 
+@st.cache_data(ttl=3600)
+def get_recent_disclosures(ticker, days=7):
+    """네이버 금융 API에서 최근 공시 가져오기"""
+    import requests
+    from datetime import datetime, timedelta
+    try:
+        url = f"https://m.stock.naver.com/api/stock/{ticker}/disclosure?page=1&pageSize=10"
+        r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+        data = r.json()
+        
+        limit_date = datetime.now() - timedelta(days=days)
+        results = []
+        for item in data:
+            dt_str = item.get('datetime', '')
+            if not dt_str: continue
+            dt_obj = datetime.fromisoformat(dt_str)
+            if dt_obj >= limit_date:
+                results.append({
+                    'title': item.get('title'),
+                    'date': dt_str[:10],
+                    'id': item.get('disclosureId')
+                })
+        return results
+    except:
+        return []
+
+def analyze_disclosure(title, ticker, disclosure_id):
+    """키워드 기반 공시 영향 분석기"""
+    link = f"https://finance.naver.com/item/news_notice_read.naver?no={disclosure_id}&code={ticker}"
+    link_md = f"[원문 보기 클릭]({link})"
+    
+    analysis = {
+        'type': '🔍 특이',
+        'impact': '알 수 없음 (원문 확인 필요)',
+        'reason': f"일반적인 패턴으로 자동 분류하기 어려운 특이 공시이거나 복잡한 내용입니다. 우측 링크를 클릭하여 공시 원문을 꼭 확인해 보세요. {link_md}"
+    }
+    
+    # 키워드 검사 (단순 휴리스틱)
+    if '유상증자' in title:
+        analysis['type'] = '⚠️ 악재성 (희석)'
+        analysis['impact'] = '주가 하락 압력'
+        analysis['reason'] = '새로운 주식을 발행하여 자금을 조달하므로, 기존 주주들의 주식 가치가 희석될 우려가 커 단기 악재로 작용할 가능성이 높습니다.'
+    elif '무상증자' in title:
+        analysis['type'] = '🔥 호재성 (유동성)'
+        analysis['impact'] = '단기 주가 상승 기대'
+        analysis['reason'] = '자본잉여금을 자본금으로 전입해 주주들에게 무료로 주식을 나누어주는 것으로, 유동성 증가로 인한 호재로 받아들여집니다.'
+    elif '단일판매' in title or '공급계약' in title or '수주' in title:
+        analysis['type'] = '🚀 호재성 (매출)'
+        analysis['impact'] = '주가 상승 압력'
+        analysis['reason'] = '대규모 매출처를 확보했다는 긍정적 신호입니다. 계약금액이 전년매출 대비 클수록 강력한 호재입니다.'
+    elif '자사주' in title and ('취득' in title or '매입' in title or '소각' in title):
+        analysis['type'] = '🛡️ 호재성 (주주환원)'
+        analysis['impact'] = '주가 하방 지지 및 상승'
+        analysis['reason'] = '유통 주식 수가 줄어들어 1주당 가치가 상승하므로 주주친화적인 강력한 호재입니다.'
+    elif '전환사채' in title or 'CB발행' in title or '신주인수권' in title or 'BW발행' in title:
+        analysis['type'] = '⚠️ 악재/중립 (오버행)'
+        analysis['impact'] = '잠재적 매도 물량 부담'
+        analysis['reason'] = '미래에 주식으로 전환될 수 있는 채권 등을 발행한 것으로, 나중에 대량 매물이 나올 수 있는 잠재적 리스크(오버행)가 존재합니다.'
+    elif '횡령' in title or '배임' in title or '감자' in title or '관리종목' in title:
+        analysis['type'] = '🚨 초특급 악재'
+        analysis['impact'] = '급락 및 거래정지 위험'
+        analysis['reason'] = '기업 존속에 치명적인 영향을 미치는 공시입니다. 매매에 극도로 유의해야 합니다.'
+    elif '영업실적' in title or '결산실적' in title or '매출액' in title:
+        analysis['type'] = '📊 실적 (확인필요)'
+        analysis['impact'] = '실적에 따라 상이'
+        analysis['reason'] = '실적 관련 공시입니다. 컨센서스(시장 기대치)를 상회했는지 하회했는지 본문을 꼭 확인해야 합니다.'
+    elif '주주총회' in title or '임원' in title or '변경' in title:
+        analysis['type'] = 'ℹ️ 중립 (일상적)'
+        analysis['impact'] = '영향 미미'
+        analysis['reason'] = '일상적인 기업 운영 관련 공시로 주가에 미치는 단기적 영향은 제한적입니다.'
+
+    if '특이' not in analysis['type']:
+        analysis['reason'] += f" {link_md}"
+
+    return analysis
 
 
 @st.cache_data(ttl=3600, max_entries=500)
@@ -1257,6 +1332,11 @@ if run_scan:
                 if not passed:
                     continue
                     
+                # 공시 데이터 로드 및 태그 부착
+                disclosures = get_recent_disclosures(ticker, days=7)
+                if disclosures:
+                    tag += " [공시이슈]"
+                    
                 # 매수밴드 및 손절선 계산
                 cur_ma5 = df_ohlcv['종가'].rolling(5).mean().iloc[-1]
                 cur_ma20 = df_ohlcv['종가'].rolling(20).mean().iloc[-1]
@@ -1282,6 +1362,7 @@ if run_scan:
                     '추세': trend_dir,
                     '스나이퍼 톡': sniper_talk,
                     '_indicators': indicators,
+                    '_disclosures': disclosures,
                 })
             except:
                 continue
@@ -1393,7 +1474,7 @@ if st.session_state.picker_result:
             '출현빈도': r.get('출현빈도', 1),
             '가중치': r.get('가중치', 5.0),
             '최초점수': r.get('최초점수', int(r['SmartScore'])),
-            'AI Tag': r['AI Tag'] + (" [공시이슈]" if i % 3 == 0 else ""),
+            'AI Tag': r['AI Tag'],
         })
 
     df_table = pd.DataFrame(table_data)
@@ -1426,6 +1507,37 @@ if st.session_state.picker_result:
             st.markdown(f"<span class='{badge}'>{judgment}</span>", unsafe_allow_html=True)
 
         st.markdown("---")
+        
+        # ── AI Tag 및 공시이슈 분석 ──
+        st.markdown("### 🤖 AI Tag 및 공시이슈 분석")
+        tag_explain = ""
+        if "역행 주도주" in sel['AI Tag']:
+            tag_explain += "✅ **[역행 주도주]**: 현재 시장 상황(하락장 또는 혼조세)에도 불구하고 지수를 역행하며 강하게 상승하는 종목으로, 세력의 수급이 몰려있을 확률이 높습니다.\n\n"
+        if "핀셋 눌림목" in sel['AI Tag']:
+            tag_explain += "✅ **[핀셋 눌림목]**: 강한 상승 후 거래량 없이 예쁘게 조정을 받고 있는 급소 타점입니다. 반등이 임박했을 가능성이 매우 높습니다.\n\n"
+        if "안전마진" in sel['AI Tag']:
+            tag_explain += "✅ **[안전마진]**: 펀더멘털 대비 주가가 바닥권에 있으며 변동성이 낮아, 매수 시 하방 리스크(손실 위험)가 매우 적은 종목입니다.\n\n"
+        if "모멘텀 급소" in sel['AI Tag'] or "수급" in sel['AI Tag'] or "불기둥" in sel['AI Tag']:
+            tag_explain += "✅ **[수급 집중/모멘텀]**: 기관과 외국인의 강력한 양매수가 터지며 추세 상승 모멘텀을 막 형성하기 시작한 초입 구간입니다.\n\n"
+        
+        if tag_explain:
+            st.info(tag_explain)
+        else:
+            st.info("우량한 필터 조건을 모두 통과한 선별 종목입니다.")
+            
+        disclosures = sel.get('_disclosures', [])
+        if disclosures:
+            for d in disclosures:
+                ana = analyze_disclosure(d['title'], sel['티커'], d['id'])
+                is_expanded = ('특이' in ana['type'] or '악재' in ana['type'] or '호재' in ana['type'])
+                with st.expander(f"{ana['type']} | {d['date']} | {d['title']}", expanded=is_expanded):
+                    st.markdown(f"**💡 AI 분석 요약:** {ana['reason']}")
+                    st.markdown(f"**📈 주가 영향력 예측:** `{ana['impact']}`")
+        else:
+            st.markdown("<span style='color:#64748b; font-size:13px;'>최근 7일 이내에 발생한 주요 공시가 없습니다.</span>", unsafe_allow_html=True)
+
+        st.markdown("---")
+
         df_ohlcv = get_ohlcv(sel['티커'], base_date, days=150)
         candle_fig = render_candle_chart(df_ohlcv, sel['종목명'], sel['티커'])
         if candle_fig:
