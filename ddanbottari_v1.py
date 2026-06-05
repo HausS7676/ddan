@@ -1401,7 +1401,7 @@ if st.session_state.picker_result:
     st.info("💡 행(Row)의 왼쪽 체크박스를 선택하면 상세 분석 차트와 수급 동향이 팝업으로 나타납니다.")
 
     # ── 상세 분석 팝업 기능 ──
-    @st.experimental_dialog("딴보따리 V1 - 정밀 종목 분석", width="large")
+    @st.dialog("딴보따리 V1 - 정밀 종목 분석", width="large")
     def show_detail_dialog(sel, base_date):
         sel_ind = sel['_indicators']
         final_sc = sel['SmartScore']
